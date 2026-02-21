@@ -1,7 +1,7 @@
 # closed_loop_system.py
 """
-主闭环控制系统
-集成：倒立摆模拟器 + 事件相机 + 状态估计 + LQR控制
+Main closed-loop control system
+Integrates: inverted pendulum simulator + event camera + state estimation + LQR control
 """
 import numpy as np
 import cv2
@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 import os
 
-# 导入自定义模块
+# Import custom modules
 from inverted_pendulum_simulator import InvertedPendulumSimulator
 from integrated_event_camera import IntegratedEventCamera
 from simple_state_estimator import SimpleStateEstimator
@@ -18,48 +18,47 @@ from pendulum_controller import PendulumController
 
 
 class ClosedLoopSystem:
-    """闭环控制系统"""
+    """Close-loop control system"""
 
     def __init__(self, config=None):
-        """初始化闭环系统"""
+        """Initialize the close-loop system"""
         self.config = {
-            # 系统参数
-            'simulation_duration': 10.0,  # 模拟时长 (秒)
-            'real_time_factor': 1.0,  # 实时因子 (1.0 = 实时)
-
-            # 视频参数
+            # System parameters
+            'simulation_duration': 10.0,  # Simulation duration (seconds)
+            'real_time_factor': 1.0,  # Real-time factor (1.0 = real-time)
+            # Video parameters
             'video_width': 320,
             'video_height': 240,
             'save_video': True,
             'show_display': True,
 
-            # 数据记录
+            # Data logging
             'log_data': True,
-            'log_interval': 0.1,  # 记录间隔 (秒)
+            'log_interval': 0.1,  # Logging interval (seconds)
 
-            # 性能监控
+            # Performance monitoring
             'monitor_performance': True,
         }
 
         if config:
             self.config.update(config)
-        # 初始化组件
+        # Initialize components
         print("=" * 60)
-        print("初始化闭环控制系统")
+        print("Initializing close-loop control system")
         print("=" * 60)
 
-        # 1. 倒立摆模拟器
+        # 1. Inverted pendulum simulator
         pendulum_config = {
             'image_width': self.config['video_width'],
             'image_height': self.config['video_height'],
-            'sampling_rate': 100.0,  # 物理模拟频率
+            'sampling_rate': 100.0,  # Physical simulation frequency
 
         }
         self.pendulum = InvertedPendulumSimulator(pendulum_config)
 
-        # 2. 事件相机模拟器
+        # 2. Event camera simulator
         event_camera_config = {
-            'dt': 10000,  # 事件相机更新间隔 (微秒) = 10ms = 100Hz
+            'dt': 10000,  # Event camera update interval
         }
         self.event_camera = IntegratedEventCamera(
             self.config['video_width'],
@@ -67,12 +66,12 @@ class ClosedLoopSystem:
             event_camera_config
         )
 
-        # 3. 状态估计器
+        # 3. State estimator
         estimator_config = {
-            'angle_noise_std': 0.05,  # 角度噪声
-            'velocity_noise_std': 0.2,  # 角速度噪声
+            'angle_noise_std': 0.05,  # Angle noise
+            'velocity_noise_std': 0.2,  # Angular velocity noise
             'delay_frames': 2,
-            'use_ground_truth': True,  # 调试时使用真实状态
+            'use_ground_truth': True,  # Use ground truth for debugging
         }
         self.estimator = SimpleStateEstimator(
             self.config['video_width'],
@@ -80,27 +79,27 @@ class ClosedLoopSystem:
             estimator_config
         )
 
-        # 设置真实状态回调3
+        # Set ground truth callback
         self.estimator.set_ground_truth_callback(
             lambda: (self.pendulum.get_angle(), self.pendulum.get_angular_velocity())
         )
 
-        # 4. 控制器
+        # 4. Controller
         controller_config = {
             'controller_type': 'PD',
             'Kp': 80.0,
             'Kd': 15.0,
             'max_force': 8.0,
-            'sampling_rate': 100.0,  # 控制器频率
+            'sampling_rate': 100.0,  # Controller frequency
         }
         self.controller = PendulumController(controller_config)
 
-        # 系统状态
+        # System state
         self.running = False
         self.simulation_time = 0.0
         self.frame_count = 0
 
-        # 数据记录
+        # Data logging
         self.data_log = {
             'timestamps': [],
             'true_angles': [],
@@ -112,7 +111,7 @@ class ClosedLoopSystem:
             'processing_times': [],
         }
 
-        # 性能监控
+        # Performance monitoring
         self.performance_stats = {
             'avg_loop_time': 0.0,
             'min_loop_time': float('inf'),
@@ -120,50 +119,50 @@ class ClosedLoopSystem:
             'frame_rate': 0.0,
         }
 
-        # 创建输出目录
+        # Create output directory
         self.output_dir = "outputs"
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
 
-        print("闭环系统初始化完成")
-        print(f"输出目录: {self.output_dir}")
+        print("Closed-loop system initialized")
+        print(f"Output directory: {self.output_dir}")
 
     def run_simulation(self):
-        """运行闭环模拟"""
+        """Run the closed-loop simulation"""
         print("\n" + "=" * 60)
-        print("开始闭环模拟")
+        print("Starting closed-loop simulation")
         print("=" * 60)
 
-        # 计算总帧数
+        # Compute total number of frames
         dt_physics = 1.0 / self.pendulum.config['sampling_rate']
-        dt_event_camera = self.event_camera.config['dt'] * 1e-6  # 微秒转秒
+        dt_event_camera = self.event_camera.config['dt'] * 1e-6  # microseconds to seconds
 
-        # 使用事件相机的时间步长作为主循环步长
+        # Use event camera time step as main loop step
         dt_main = dt_event_camera
         total_frames = int(self.config['simulation_duration'] / dt_main)
 
-        print(f"模拟参数:")
-        print(f"  总时长: {self.config['simulation_duration']}s")
-        print(f"  主循环步长: {dt_main * 1000:.1f}ms")
-        print(f"  总帧数: {total_frames}")
-        print(f"  实时因子: {self.config['real_time_factor']}")
+        print(f"Simulation parameters:")
+        print(f"  Total duration: {self.config['simulation_duration']}s")
+        print(f"  Main loop step: {dt_main * 1000:.1f}ms")
+        print(f"  Total frames: {total_frames}")
+        print(f"  Real-time factor: {self.config['real_time_factor']}")
 
-        # 重置所有组件
+        # Reset all components
         self.pendulum.reset()
         self.event_camera.reset()
         self.estimator.reset()
         self.controller.reset()
 
-        # 初始化事件相机（使用第一帧）
+        # Initialize event camera with first frame
         first_frame = self.pendulum.get_current_image()
         self.event_camera.init_with_frame(first_frame)
 
-        # 主循环
+        # Main loop
         self.running = True
         start_time = time.time()
         real_start_time = start_time
 
-        # 初始化控制力
+        # Initialize control force
         control_force = 0.0
 
         for frame_idx in range(total_frames):
@@ -173,30 +172,30 @@ class ClosedLoopSystem:
             frame_start_time = time.time()
             self.simulation_time = frame_idx * dt_main
 
-            # 1. 获取当前状态的真实图像
+            # 1. Get current image from pendulum (ground truth)
             current_frame = self.pendulum.get_current_image()
 
-            # 2. 事件相机处理（生成事件流）
+            # 2. Process event camera (generate event stream)
             events = self.event_camera.process_frame(current_frame)
 
-            # 3. 状态估计（从事件流估计角度和角速度）
+            # 3. State estimation (estimate angle and angular velocity from events)
             current_time_us = self.event_camera.current_time_us
             estimated_angle, estimated_velocity, valid = self.estimator.estimate_from_events(
                 events, current_time_us
             )
 
-            # 4. 控制器计算
+            # 4. Controller computation
             control_force = self.controller.compute_control(
                 estimated_angle, estimated_velocity, self.simulation_time
             )
 
-            # 5. 应用控制力到倒立摆（物理模拟）
-            # 注意：这里需要多次物理步长来匹配事件相机步长
+            # 5. Apply control force to pendulum (physics simulation)
+            # Note: need multiple physics steps to match event camera step
             physics_steps_per_frame = int(dt_main / dt_physics)
             for _ in range(physics_steps_per_frame):
                 self.pendulum.step(control_force)
 
-            # 6. 记录数据
+            # 6. Log data (commented out)
             # if frame_idx % int(1.0 / dt_main / 10) == 0:  # 每秒记录10次
             #     self._log_data(
             #         self.simulation_time,
@@ -209,7 +208,7 @@ class ClosedLoopSystem:
             #         time.time() - frame_start_time
             #     )
 
-            # 7. 显示（可选）
+            # 7. Display (optional)
             if self.config['show_display']:
                 self._display_current_state(
                     current_frame,
@@ -220,45 +219,45 @@ class ClosedLoopSystem:
                     events.i
                 )
 
-            # 8. 性能监控
+            # 8. Performance monitoring
             frame_time = time.time() - frame_start_time
             self._update_performance_stats(frame_time)
 
-            # 9. 实时控制
+            # 9. Real-time control
             if self.config['real_time_factor'] > 0:
-                # 计算应该等待的时间
+                # Compute expected frame time
                 expected_frame_time = dt_main / self.config['real_time_factor']
                 if frame_time < expected_frame_time:
                     time.sleep(expected_frame_time - frame_time)
 
-            # 10. 检查退出条件
+            # 10. Check exit condition
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 print("\n用户请求停止模拟")
                 break
 
-        # 模拟结束
+        # Simulation ended
         self.running = False
         total_real_time = time.time() - real_start_time
 
         print("\n" + "=" * 60)
-        print("模拟结束")
+        print("Simulation ended")
         print("=" * 60)
 
-        # 显示性能统计
+        # Display performance statistics
         self._print_performance_stats(total_real_time)
 
-        # 保存数据
+        # Save data
         if self.config['log_data']:
             self._save_data()
 
-        # 生成报告
+        # Generate report (commented out)
         # self._generate_report()
 
-        # 清理
+        # Cleanup
         cv2.destroyAllWindows()
 
     def _log_data(self, timestamp, true_angle, est_angle, true_vel, est_vel, force, event_count, proc_time):
-        """记录数据"""
+        """Log data"""
         self.data_log['timestamps'].append(timestamp)
         self.data_log['true_angles'].append(true_angle)
         self.data_log['estimated_angles'].append(est_angle)
@@ -269,10 +268,10 @@ class ClosedLoopSystem:
         self.data_log['processing_times'].append(proc_time)
 
     def _display_current_state(self, frame, true_angle, est_angle, force, frame_idx, event_count):
-        """显示当前状态"""
+        """Display current state"""
         display = frame.copy()
 
-        # 添加估计信息
+        # Add estimation information
         cv2.putText(display, f"Frame: {frame_idx}", (10, 150),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         cv2.putText(display, f"True Angle: {np.degrees(true_angle):.1f} deg", (10, 170),
@@ -284,7 +283,7 @@ class ClosedLoopSystem:
         cv2.putText(display, f"Events: {event_count}", (10, 230),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 200, 0), 1)
 
-        # 显示系统状态
+        # Display system status
         status = "RUNNING" if self.running else "STOPPED"
         cv2.putText(display, f"Status: {status}", (200, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0) if self.running else (0, 0, 255), 2)
@@ -292,7 +291,7 @@ class ClosedLoopSystem:
         cv2.imshow("Closed-Loop Control", display)
 
     def _update_performance_stats(self, frame_time):
-        """更新性能统计"""
+        """Update performance statistics"""
         self.performance_stats['avg_loop_time'] = (
                                                           self.performance_stats[
                                                               'avg_loop_time'] * self.frame_count + frame_time
@@ -312,56 +311,55 @@ class ClosedLoopSystem:
             self.performance_stats['frame_rate'] = self.frame_count / self.simulation_time
 
     def _print_performance_stats(self, total_real_time):
-        """打印性能统计"""
-        print("\n性能统计:")
-        print(f"  总模拟时间: {self.simulation_time:.2f}s")
-        print(f"  总实际时间: {total_real_time:.2f}s")
-        print(f"  实时因子: {self.simulation_time / total_real_time:.2f}")
-        print(f"  总帧数: {self.frame_count}")
-        print(f"  平均帧率: {self.frame_count / total_real_time:.1f} Hz")
-        print(f"  平均循环时间: {self.performance_stats['avg_loop_time'] * 1000:.1f}ms")
-        print(f"  最小循环时间: {self.performance_stats['min_loop_time'] * 1000:.1f}ms")
-        print(f"  最大循环时间: {self.performance_stats['max_loop_time'] * 1000:.1f}ms")
+        """Print performance statistics"""
+        print("\nPerformance statistics:")
+        print(f"  Total simulation time: {self.simulation_time:.2f}s")
+        print(f"  Total real time: {total_real_time:.2f}s")
+        print(f"  Real-time factor: {self.simulation_time / total_real_time:.2f}")
+        print(f"  Total frames: {self.frame_count}")
+        print(f"  Average frame rate: {self.frame_count / total_real_time:.1f} Hz")
+        print(f"  Average loop time: {self.performance_stats['avg_loop_time'] * 1000:.1f}ms")
+        print(f"  Min loop time: {self.performance_stats['min_loop_time'] * 1000:.1f}ms")
+        print(f"  Max loop time: {self.performance_stats['max_loop_time'] * 1000:.1f}ms")
 
-        # 事件相机统计
+        # Event camera statistics
         event_stats = self.event_camera.get_event_statistics()
-        print(f"\n事件相机统计:")
-        print(f"  总事件数: {event_stats['total_events']}")
-        print(f"  平均事件率: {event_stats['average_rate']:.0f} events/s")
-        print(f"  总帧数: {event_stats['frame_count']}")
+        print(f"\nEvent camera statistics:")
+        print(f"  Total events: {event_stats['total_events']}")
+        print(f"  Average event rate: {event_stats['average_rate']:.0f} events/s")
+        print(f"  Total frames: {event_stats['frame_count']}")
 
-        # 控制器统计
+        # Controller statistics
         control_stats = self.controller.get_control_statistics()
-        print(f"\n控制器统计:")
-        print(f"  平均控制力: {control_stats['avg_force']:.2f}N")
-        print(f"  最大控制力: {control_stats['max_force']:.2f}N")
-        print(f"  RMS角度误差: {np.degrees(control_stats['rms_error']):.2f}°")
-
-#     # def _save_data(self):
-#     #     """保存数据到文件"""
-#     #     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-#     #
-#     #     # 保存原始数据
-#     #     data_file = f"{self.output_dir}/simulation_data_{timestamp}.npz"
-#     #     np.savez(
-#     #         data_file,
-#     #         timestamps=np.array(self.data_log['timestamps']),
-#     #         true_angles=np.array(self.data_log['true_angles']),
-#     #         estimated_angles=np.array(self.data_log['estimated_angles']),
-#     #         true_velocities=np.array(self.data_log['true_velocities']),
-#     #         estimated_velocities=np.array(self.data_log['estimated_velocities']),
-#     #         control_forces=np.array(self.data_log['control_forces']),
-#     #         event_counts=np.array(self.data_log['event_counts']),
-#     #         processing_times=np.array(self.data_log['processing_times']),
-#     #         config=self.config
-#     #     )
-#     #
-#     #     print(f"数据保存到: {data_file}")
+        print("\nController statistics:")
+        print(f"  Average control force: {control_stats['avg_force']:.2f}N")
+        print(f"  Max control force: {control_stats['max_force']:.2f}N")
+        print(f"  RMS angle error: {np.degrees(control_stats['rms_error']):.2f}°")
+    # def _save_data(self):
+    #     """Sava data to file"""
+    #     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    #
+    #     # Sava raw data
+    #     data_file = f"{self.output_dir}/simulation_data_{timestamp}.npz"
+    #     np.savez(
+    #         data_file,
+    #         timestamps=np.array(self.data_log['timestamps']),
+    #         true_angles=np.array(self.data_log['true_angles']),
+    #         estimated_angles=np.array(self.data_log['estimated_angles']),
+    #         true_velocities=np.array(self.data_log['true_velocities']),
+    #         estimated_velocities=np.array(self.data_log['estimated_velocities']),
+    #         control_forces=np.array(self.data_log['control_forces']),
+    #         event_counts=np.array(self.data_log['event_counts']),
+    #         processing_times=np.array(self.data_log['processing_times']),
+    #         config=self.config
+    #     )
+    #
+    #     print(f"Data save to: {data_file}")
 #
 #     def _generate_report(self):
-#         """生成模拟报告和图表"""
+#         """Generate simulation report and plots"""
 #         if not self.data_log['timestamps']:
-#             print("没有数据可生成报告")
+#             print("no data")
 #             return
 #
 #         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -469,14 +467,14 @@ class ClosedLoopSystem:
 
 
 def main():
-    """主函数"""
-    print("倒立摆闭环控制系统模拟器")
+    """Main function"""
+    print("Inverted Pendulum Closed-Loop Control System Simulator")
     print("=" * 60)
 
-    # 配置
+    # Configuration
     config = {
-        'simulation_duration': 20.0,  # 模拟5秒
-        'real_time_factor': 1.0,  # 实时运行
+        'simulation_duration': 20.0,  # Simulation 20 seconds
+        'real_time_factor': 1.0,  # Real-time execution
         'video_width': 480,
         'video_height': 360,
         'save_video': False,
@@ -484,21 +482,21 @@ def main():
         'log_data': True,
     }
 
-    # 创建系统
+    # Create system
     system = ClosedLoopSystem(config)
 
-    # 运行模拟
+    # Run simulation
     try:
         system.run_simulation()
     except KeyboardInterrupt:
-        print("\n模拟被用户中断")
+        print("\nSimulation interrupted by user")
     except Exception as e:
-        print(f"\n模拟出错: {e}")
+        print(f"\nSimulation error: {e}")
         import traceback
         traceback.print_exc()
     finally:
         cv2.destroyAllWindows()
-        print("\n系统关闭完成")
+        print("\nSystem shut down")
 
 
 if __name__ == "__main__":

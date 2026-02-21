@@ -1,7 +1,6 @@
 # integrated_event_camera.py
 """
-集成的事件相机模拟器，与倒立摆模拟器协同工作
-"""
+Integrated event camera simulator, working together with the inverted pendulum simulator"""
 import numpy as np
 import cv2
 import sys
@@ -14,21 +13,21 @@ from event_display import EventDisplay
 
 
 class IntegratedEventCamera:
-    """集成的事件相机模拟器"""
+    """Integrated event camera simulator"""
 
     def __init__(self, width, height, config=None):
         """
-        初始化事件相机模拟器
+        Initialize the event camera simulator
 
         Args:
-            width: 图像宽度
-            height: 图像高度
-            config: DVS配置参数
+            width: image width
+            height: image height
+            config: DVS configuration parameters
         """
         self.width = width
         self.height = height
 
-        # DVS默认配置
+        # DVS default configuration
         self.config = {
             'th_pos': 0.4,
             'th_neg': 0.4,
@@ -39,13 +38,13 @@ class IntegratedEventCamera:
             'bgnp': 0.1,
             'bgnn': 0.01,
             'ref': 100,
-            'dt': 1000,  # 微秒
+            'dt': 1000,  # microseconds
         }
 
         if config:
             self.config.update(config)
 
-        # 初始化DVS传感器
+        # Initialize DVS sensor
         self.dvs = DvsSensor("IntegratedDVS")
         self.dvs.initCamera(
             width, height,
@@ -60,10 +59,10 @@ class IntegratedEventCamera:
             bgnn=self.config['bgnn']
         )
 
-        # 事件缓冲区
+        # Event buffer
         self.event_buffer = EventBuffer(1000)
 
-        # 事件显示器
+        # Event display
         render_timesurface = 1
         self.event_display = EventDisplay(
             "Event Camera Output",
@@ -72,72 +71,72 @@ class IntegratedEventCamera:
             render_timesurface
         )
 
-        # 时间管理
+        # Time management
         self.current_time_us = 0
         self.frame_count = 0
 
-        # 事件统计
+        # Event statistics
         self.event_count = 0
         self.event_rate_history = []
 
-        print(f"集成事件相机初始化完成: {width}x{height}")
+        print(f"Integrated event camera initialized: {width}x{height}")
 
     def init_with_frame(self, frame):
         """
-        使用第一帧初始化DVS
+        Initialize the DVS with the first frame
 
         Args:
-            frame: 第一帧图像 (BGR格式)
+            frame: first frame image (BGR format)
         """
-        # 转换为灰度图
+        # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # 转换为DVS输入格式
+        # Convert to DVS input format
         dvs_input = gray / 255.0 * 1e4
 
-        # 初始化DVS
+        # Initialize DVS
         self.dvs.init_image(dvs_input)
 
-        print("DVS使用第一帧图像初始化完成")
+        print("DVS initialized with first frame")
 
     def process_frame(self, frame, dt_us=None):
         """
-        处理一帧图像，生成事件
+        Process one frame and generate events
 
         Args:
-            frame: 当前帧图像 (BGR格式)
-            dt_us: 时间间隔 (微秒)，如果为None则使用配置中的dt
+            frame: current frame image (BGR format)
+            dt_us: time interval (microseconds), if None use dt from config
 
         Returns:
-            事件缓冲区
+            event buffer
         """
         if dt_us is None:
             dt_us = self.config['dt']
 
-        # 转换为灰度图
+        # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # 转换为DVS输入格式
+        # Convert to DVS input format
         dvs_input = gray / 255.0 * 1e4
 
-        # 生成事件
+        # Generate events
         events = self.dvs.update(dvs_input, dt_us)
 
-        # 更新时间
+        # Update time
         self.current_time_us += dt_us
         self.frame_count += 1
 
-        # 更新事件统计
+        # Update event statistics
         self.event_count += events.i
-        self.event_rate_history.append(events.i / (dt_us * 1e-6))  # 事件/秒
+        self.event_rate_history.append(events.i / (dt_us * 1e-6))  # vents per second
 
-        # 显示事件
+        # Display events
         self.event_display.update(events, dt_us)
 
         return events
 
     def get_event_statistics(self):
-        """获取事件统计信息"""
+        """Get event statistics"""
         if not self.event_rate_history:
             return {
                 'total_events': 0,
@@ -156,8 +155,8 @@ class IntegratedEventCamera:
         }
 
     def reset(self):
-        """重置事件相机"""
-        # 重新初始化DVS
+        """Reset the event camera"""
+        # Re‑initialize DVS
         self.dvs = DvsSensor("IntegratedDVS")
         self.dvs.initCamera(
             self.width, self.height,
@@ -172,10 +171,10 @@ class IntegratedEventCamera:
             bgnn=self.config['bgnn']
         )
 
-        # 重置状态
+        # Reset state
         self.current_time_us = 0
         self.frame_count = 0
         self.event_count = 0
         self.event_rate_history = []
 
-        print("事件相机已重置")
+        print("Event camera reset")
