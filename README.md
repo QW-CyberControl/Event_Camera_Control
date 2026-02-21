@@ -16,22 +16,22 @@ python closed_loop_system.py
 
 ## Project Structure
 
-├── README.md                                                 # This file  
-├── example/                                                      # Main application modules  
-│   ├── closed_loop_system.py                         # Main closed‑loop orchestrator  
-│   ├── integrated_event_camera.py               # Event camera simulator (wrapper for src/dvs_sensor)  
-│   ├── inverted_pendulum_simulator.py       # Inverted pendulum physics simulator  
-│   ├── pendulum_controller.py                       # Controller (PID, LQR)  
-│   ├── realtime_monitor.py                             # Real‑time monitoring GUI (optional)  
-│   ├── simple_state_estimator.py                   # Simplified state estimator (with noise/delay)  
-│   └── outputs/                                                  # Output directory (created automatically)  
-│       ├── simulation_data_*.npz                        # (commented out) Logged data  
-│       ├── simulation_report_*.png                      # (commented out) Generated charts  
-│       └── simulation_report_*.txt                    # (commented out) Text report  
-└── src/                                                                # Low‑level event camera simulation modules  
-    ├── dvs_sensor.py                                         # DVS sensor model (ICNS)  
-    ├── event_buffer.py                                      # Event storage and manipulation  
-    ├── event_display.py                                    # Real‑time event visualisation  
+├── README.md                                                         # This file  
+├── example/                                                              # Main application modules  
+│   ├── closed_loop_system.py                                 # Main closed‑loop orchestrator  
+│   ├── integrated_event_camera.py                       # Event camera simulator (wrapper for src/dvs_sensor)  
+│   ├── inverted_pendulum_simulator.py               # Inverted pendulum physics simulator  
+│   ├── pendulum_controller.py                               # Controller (PID, LQR)  
+│   ├── realtime_monitor.py                                     # Real‑time monitoring GUI (optional)  
+│   ├── simple_state_estimator.py                           # Simplified state estimator (with noise/delay)  
+│   └── outputs/                                                          # Output directory (created automatically)  
+│       ├── simulation_data_*.npz                                # (commented out) Logged data  
+│       ├── simulation_report_*.png                              # (commented out) Generated charts  
+│       └── simulation_report_*.txt                            # (commented out) Text report  
+└── src/                                                                        # Low‑level event camera simulation modules  
+    ├── dvs_sensor.py                                                 # DVS sensor model (ICNS)  
+    ├── event_buffer.py                                              # Event storage and manipulation  
+    ├── event_display.py                                            # Real‑time event visualisation  
     └── dat_files.py                                             # Read/write .dat event files 
 
 ## Module Descriptions
