@@ -17,7 +17,7 @@ class InvertedPendulumSimulator:
         self.config = {
             'length': 1.0,                  # Pendulum length (m)
             'mass': 0.1,                    # Pendulum mass (kg)
-            'gravity': 9.81,                # Gravity acceleration (m/s²)
+            'gravity': 9.81,                # Gravity acceleration (m/s^2)
             'friction': 0.1,                # Friction coefficient
             'cart_mass': 1.0,               # Cart mass (kg)
             'cart_friction': 0.05,          # Cart friction coefficient
@@ -62,7 +62,7 @@ class InvertedPendulumSimulator:
         # Image frame buffer
         self.frame_buffer = []
 
-        # Pre‑computed parameters
+        # Precomputed parameters
         self.m = self.config['mass']
         self.M = self.config['cart_mass']
         self.l = self.config['length']
@@ -74,7 +74,7 @@ class InvertedPendulumSimulator:
         print(f"  Pendulum length: {self.l}m, mass: {self.m}kg")
         print(f"  Cart mass: {self.M}kg")
         print(f"  Sampling rate: {self.config['sampling_rate']}Hz")
-        print(f"  Initial angle: {np.degrees(self.state[2]):.1f}°")
+        print(f"  Initial angle: {np.degrees(self.state[2]):.1f} deg")
 
     def dynamics(self, t, state, F):
         """
@@ -307,6 +307,46 @@ class InvertedPendulumSimulator:
         self.frame_buffer = []
 
         print("Simulator reset")
+
+    def get_cart_x_pixel(self):
+        """
+        将小车物理位置转换为画面中的 x 像素坐标。
+
+        使用与 get_current_image() 一致的坐标映射。
+        供 EventFilter 圆形 ROI 使用。
+
+        Returns:
+            cart_x (int): 小车在画面中的 x 坐标（像素）
+        """
+        width = self.config['image_width']
+        height = self.config['image_height']
+        x_cart = self.state[0]
+
+        ground_y = int(height * 2 / 3)
+        horizontal_scale = width / (4 * self.l)
+        vertical_scale = (ground_y - 20) / (2 * self.l)
+        scale = min(horizontal_scale, vertical_scale)
+        center_x = width // 2
+
+        cart_x = int(center_x + x_cart * scale)
+        return cart_x
+
+    def get_pendulum_length_pixels(self):
+        """
+        杆子在画面中的像素长度（用于圆形ROI半径）。
+
+        Returns:
+            length_px (int): 杆子的像素长度
+        """
+        width = self.config['image_width']
+        height = self.config['image_height']
+
+        ground_y = int(height * 2 / 3)
+        horizontal_scale = width / (4 * self.l)
+        vertical_scale = (ground_y - 20) / (2 * self.l)
+        scale = min(horizontal_scale, vertical_scale)
+
+        return int(self.l * scale)
 
     def get_state_vector(self):
         """Get the state vector"""
