@@ -1,365 +1,315 @@
-# pendulum_simulator.py
-"""
-Inverted pendulum physics simulator
-"""
-import numpy as np
+# inverted_pendulum_simulator.py
+"""Inverted pendulum on a cart physics and rendering simulator."""
+from pathlib import Path
+
 import cv2
-import matplotlib.pyplot as plt
-from scipy.integrate import solve_ivp
+import numpy as np
 
 
 class InvertedPendulumSimulator:
-    """Inverted pendulum physics simulator"""
+    """Nonlinear cart-pendulum simulator with OpenCV rendering."""
 
     def __init__(self, config=None):
-        """Initialize the inverted pendulum simulator"""
-        # Physical parameters
         self.config = {
-            'length': 1.0,                  # Pendulum length (m)
-            'mass': 0.1,                    # Pendulum mass (kg)
-            'gravity': 9.81,                # Gravity acceleration (m/s^2)
-            'friction': 0.1,                # Friction coefficient
-            'cart_mass': 1.0,               # Cart mass (kg)
-            'cart_friction': 0.05,          # Cart friction coefficient
-
-            # Image parameters
-            'image_width': 320,
-            'image_height': 240,
-            'pendulum_thickness': 5,
-            'cart_width': 40,
-            'cart_height': 20,
-
-            # Control parameters
-            'max_force': 10.0,  # Maximum control force (N)
-            'sampling_rate': 100.0,  # Sampling rate (Hz)
-
-            # Initial state
-            'initial_angle': np.radians(5),   # Initial angle (rad)
-            'initial_angular_velocity': 0.0,  # Initial angular velocity (rad/s)
-            'initial_cart_position': 0.0,     # Initial cart position (m)
-            'initial_cart_velocity': 0.0,     # Initial cart velocity (m/s)
+            "length": 1.0,
+            "mass": 0.1,
+            "gravity": 9.81,
+            "friction": 0.1,
+            "cart_mass": 1.0,
+            "cart_friction": 0.05,
+            "image_width": 320,
+            "image_height": 240,
+            "pendulum_thickness": 5,
+            "cart_width": 40,
+            "cart_height": 20,
+            "max_force": 10.0,
+            "sampling_rate": 100.0,
+            "initial_angle": np.radians(5.0),
+            "initial_angular_velocity": 0.0,
+            "initial_cart_position": 0.0,
+            "initial_cart_velocity": 0.0,
         }
-
         if config:
             self.config.update(config)
 
-        # State variables
-        self.state = np.array([
-            self.config['initial_cart_position'],
-            self.config['initial_cart_velocity'],
-            self.config['initial_angle'],
-            self.config['initial_angular_velocity']
-        ])
+        self.m = self.config["mass"]
+        self.M = self.config["cart_mass"]
+        self.l = self.config["length"]
+        self.g = self.config["gravity"]
+        self.b = self.config["friction"]
+        self.b_cart = self.config["cart_friction"]
+        self.dt = 1.0 / self.config["sampling_rate"]
 
-        self.time = 0.0
-        self.dt = 1.0 / self.config['sampling_rate']
-
-        # Control input history
-        self.control_history = []
-        self.state_history = []
-        self.time_history = []
-
-        # Image frame buffer
-        self.frame_buffer = []
-
-        # Precomputed parameters
-        self.m = self.config['mass']
-        self.M = self.config['cart_mass']
-        self.l = self.config['length']
-        self.g = self.config['gravity']
-        self.b = self.config['friction']
-        self.b_cart = self.config['cart_friction']
+        self.reset(print_message=False)
 
         print("Inverted pendulum simulator initialized:")
-        print(f"  Pendulum length: {self.l}m, mass: {self.m}kg")
-        print(f"  Cart mass: {self.M}kg")
-        print(f"  Sampling rate: {self.config['sampling_rate']}Hz")
+        print(f"  Pendulum length: {self.l} m, mass: {self.m} kg")
+        print(f"  Cart mass: {self.M} kg")
+        print(f"  Sampling rate: {self.config['sampling_rate']} Hz")
         print(f"  Initial angle: {np.degrees(self.state[2]):.1f} deg")
 
-    def dynamics(self, t, state, F):
-        """
-        Inverted pendulum dynamics equations
-
-        Args:
-            t: time
-            state: [x, x_dot, theta, theta_dot]
-            F: control force (N)
-
-        Returns:
-            state derivatives
-        """
+    def dynamics(self, t, state, force):
+        """Return derivatives for state [x, x_dot, theta, theta_dot]."""
         x, x_dot, theta, theta_dot = state
-
-        # System parameters
-        m, M, l, g, b, b_cart = self.m, self.M, self.l, self.g, self.b, self.b_cart
-
-        # Intermediate variables
         sin_theta = np.sin(theta)
         cos_theta = np.cos(theta)
 
-        # Compute accelerations
-        denominator = (M + m) * (l ** 2) - m ** 2 * l ** 2 * cos_theta ** 2
+        denominator = (self.M + self.m) * self.l ** 2 - (
+            self.m ** 2 * self.l ** 2 * cos_theta ** 2
+        )
+        if abs(denominator) < 1e-9:
+            denominator = np.sign(denominator) * 1e-9 if denominator != 0 else 1e-9
 
-        if abs(denominator) < 1e-6:
-            denominator = 1e-6
-
-        # Angular acceleration
         theta_ddot = (
-                             (M + m) * g * sin_theta
-                             - m * l * theta_dot ** 2 * sin_theta * cos_theta
-                             + (F - b_cart * x_dot) * cos_theta
-                             - b * theta_dot
-                     ) / denominator * l
+            (self.M + self.m) * self.g * sin_theta
+            - self.m * self.l * theta_dot ** 2 * sin_theta * cos_theta
+            + (force - self.b_cart * x_dot) * cos_theta
+            - self.b * theta_dot
+        ) * self.l / denominator
 
-        # Cart acceleration
         x_ddot = (
-                         F - b_cart * x_dot
-                         + m * l * (theta_dot ** 2 * sin_theta - theta_ddot * cos_theta)
-                 ) / (M + m)
+            force
+            - self.b_cart * x_dot
+            + self.m * self.l * (theta_dot ** 2 * sin_theta - theta_ddot * cos_theta)
+        ) / (self.M + self.m)
 
-        return [x_dot, x_ddot, theta_dot, theta_ddot]
+        return np.array([x_dot, x_ddot, theta_dot, theta_ddot], dtype=float)
 
     def step(self, control_force=0.0):
-        """
-        Perform one simulation time step
-
-        Args:
-            control_force: control force (N)
-
-        Returns:
-            updated state
-        """
-        # Limit control force
-        control_force = np.clip(
+        """Advance the simulator by one RK4 integration step."""
+        force = float(np.clip(
             control_force,
-            -self.config['max_force'],
-            self.config['max_force']
-        )
+            -self.config["max_force"],
+            self.config["max_force"],
+        ))
 
-        # RK4 integration
-        k1 = self.dynamics(self.time, self.state, control_force)
-        k2 = self.dynamics(self.time + self.dt / 2,
-                           self.state + np.array(k1) * self.dt / 2,
-                           control_force)
-        k3 = self.dynamics(self.time + self.dt / 2,
-                           self.state + np.array(k2) * self.dt / 2,
-                           control_force)
-        k4 = self.dynamics(self.time + self.dt,
-                           self.state + np.array(k3) * self.dt,
-                           control_force)
+        k1 = self.dynamics(self.time, self.state, force)
+        k2 = self.dynamics(self.time + self.dt / 2.0, self.state + k1 * self.dt / 2.0, force)
+        k3 = self.dynamics(self.time + self.dt / 2.0, self.state + k2 * self.dt / 2.0, force)
+        k4 = self.dynamics(self.time + self.dt, self.state + k3 * self.dt, force)
 
-        # Update state
-        self.state += (np.array(k1) + 2 * np.array(k2) + 2 * np.array(k3) + np.array(k4)) * self.dt / 6
-
-        # Update time
+        self.state = self.state + (k1 + 2.0 * k2 + 2.0 * k3 + k4) * self.dt / 6.0
         self.time += self.dt
 
-        # Record history
         self.state_history.append(self.state.copy())
-        self.control_history.append(control_force)
+        self.control_history.append(force)
         self.time_history.append(self.time)
-
         return self.state.copy()
 
     def get_current_image(self):
-        """
-        Generate an image of the current state
-
-        Returns:
-            BGR image of the current state
-        """
-        width = self.config['image_width']
-        height = self.config['image_height']
-
-        # Create blank image
+        """Render the current state as a BGR image."""
+        width = self.config["image_width"]
+        height = self.config["image_height"]
         image = np.zeros((height, width, 3), dtype=np.uint8)
 
-        # Compute pendulum endpoint position
-        x_cart = self.state[0]  # cart position
-        theta = self.state[2]  # pendulum angle
-
-        # Convert physical coordinates to image coordinates
-        # Image centre corresponds to x=0, bottom corresponds to y=0
+        x_cart = self.state[0]
+        theta = self.state[2]
         ground_y = int(height * 2 / 3)
-        vertical_scale = (ground_y - 20) / (2 * self.l)
-        # Horizontal: leave 1/4 width on each side, so that pendulum swings within bounds
-        horizontal_scale = width / (4 * self.l)
-        # Take the smaller value to ensure it fits in both directions
-        scale = min(horizontal_scale, vertical_scale)  # scaling factor
-        # scale = min(width, height) / (3 * self.l)
-
+        scale = self._pixel_scale()
         center_x = width // 2
-
-
-        # Cart position
         cart_x = int(center_x + x_cart * scale)
         cart_y = ground_y
+        cart_width = self.config["cart_width"]
+        cart_height = self.config["cart_height"]
 
-        # Pendulum endpoint
-        pendulum_length_pixels = int(self.l * scale)
-        pendulum_end_x = int(cart_x + pendulum_length_pixels * np.sin(theta))
-        pendulum_end_y = int(cart_y - pendulum_length_pixels * np.cos(theta))
+        pendulum_length_px = int(self.l * scale)
+        pivot = (cart_x, cart_y - cart_height // 2)
+        pendulum_end = (
+            int(pivot[0] + pendulum_length_px * np.sin(theta)),
+            int(pivot[1] - pendulum_length_px * np.cos(theta)),
+        )
 
-        # Draw ground
         cv2.line(image, (0, ground_y), (width, ground_y), (200, 200, 200), 2)
+        cv2.rectangle(
+            image,
+            (cart_x - cart_width // 2, cart_y - cart_height),
+            (cart_x + cart_width // 2, cart_y),
+            (100, 100, 255),
+            -1,
+        )
+        cv2.line(
+            image,
+            pivot,
+            pendulum_end,
+            (0, 255, 0),
+            self.config["pendulum_thickness"],
+        )
+        cv2.circle(
+            image,
+            pendulum_end,
+            self.config["pendulum_thickness"] * 2,
+            (0, 200, 0),
+            -1,
+        )
 
-        # Draw cart
-        cart_width = self.config['cart_width']
-        cart_height = self.config['cart_height']
-        cv2.rectangle(image,
-                      (cart_x - cart_width // 2, cart_y - cart_height),
-                      (cart_x + cart_width // 2, cart_y),
-                      (100, 100, 255), -1)
-
-        # Draw pendulum rod
-        pendulum_thickness = self.config['pendulum_thickness']
-        cv2.line(image,
-                 (cart_x, cart_y - cart_height // 2),
-                 (pendulum_end_x, pendulum_end_y),
-                 (0, 255, 0), pendulum_thickness)
-
-        # Draw pendulum bob
-        cv2.circle(image, (pendulum_end_x, pendulum_end_y),
-                   pendulum_thickness * 2, (0, 200, 0), -1)
-
-        # Add text information
-        cv2.putText(image, f"Time: {self.time:.2f}s", (10, 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        cv2.putText(image, f"Angle: {np.degrees(theta):.1f} deg", (10, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        cv2.putText(image, f"Control: {self.control_history[-1] if self.control_history else 0:.2f}N",
-                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        cv2.putText(image, f"Cart Pos: {x_cart:.2f}m", (10, 80),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-
+        force = self.control_history[-1] if self.control_history else 0.0
+        labels = [
+            f"Time: {self.time:.2f}s",
+            f"Angle: {np.degrees(theta):.1f} deg",
+            f"Control: {force:.2f} N",
+            f"Cart Pos: {x_cart:.2f} m",
+        ]
+        for idx, label in enumerate(labels):
+            cv2.putText(
+                image,
+                label,
+                (10, 20 + idx * 20),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 255),
+                1,
+            )
         return image
 
     def generate_video_frames(self, duration, control_forces=None, save_video=False):
-        """
-        Generate video frames
-
-        Args:
-            duration: simulation duration (seconds)
-            control_forces: control force sequence (optional)
-            save_video: whether to save as video file
-
-        Returns:
-            list of image frames
-        """
-        num_steps = int(duration * self.config['sampling_rate'])
+        """Generate rendered frames while advancing the simulation."""
+        num_steps = int(duration * self.config["sampling_rate"])
         frames = []
+        print(f"Generating {duration}s simulation, {num_steps} frames")
 
-        print(f"Generating video of {duration}s, total {num_steps} frames")
+        for idx in range(num_steps):
+            force = 0.0
+            if control_forces is not None and idx < len(control_forces):
+                force = control_forces[idx]
+            self.step(force)
+            frames.append(self.get_current_image())
+            if idx % 100 == 0:
+                print(f"  Progress: {idx}/{num_steps} frames")
 
-        for i in range(num_steps):
-            # Get control force
-            if control_forces is not None and i < len(control_forces):
-                control_force = control_forces[i]
-            else:
-                control_force = 0.0
-
-            # Simulate one step
-            self.step(control_force)
-
-            # Generate image
-            frame = self.get_current_image()
-            frames.append(frame)
-
-            # Show progress
-            if i % 100 == 0:
-                print(f"  进度: {i}/{num_steps} 帧")
-
-        # Save video
         if save_video and frames:
-            self.save_video(frames, "outputs/pendulum_simulation.mp4")
-
+            output_dir = Path("outputs")
+            output_dir.mkdir(exist_ok=True)
+            self.save_video(frames, str(output_dir / "pendulum_simulation.mp4"))
         return frames
 
     def save_video(self, frames, filename):
-        """Save video file"""
+        """Save rendered frames to a video file."""
         if not frames:
             return
-
         height, width = frames[0].shape[:2]
-        fps = self.config['sampling_rate']
+        fps = self.config["sampling_rate"]
+        output_path = Path(filename)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(filename, fourcc, fps, (width, height))
-
+        writer = cv2.VideoWriter(
+            str(output_path),
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            fps,
+            (width, height),
+        )
         for frame in frames:
-            out.write(frame)
+            writer.write(frame)
+        writer.release()
+        print(f"Video saved to: {output_path}")
 
-        out.release()
-        print(f"Video saved to: {filename}")
-
-    def reset(self):
-        """Reset the simulator"""
+    def reset(self, print_message=True):
+        """Reset simulator state and histories."""
         self.state = np.array([
-            self.config['initial_cart_position'],
-            self.config['initial_cart_velocity'],
-            self.config['initial_angle'],
-            self.config['initial_angular_velocity']
-        ])
+            self.config["initial_cart_position"],
+            self.config["initial_cart_velocity"],
+            self.config["initial_angle"],
+            self.config["initial_angular_velocity"],
+        ], dtype=float)
         self.time = 0.0
         self.control_history = []
         self.state_history = []
         self.time_history = []
         self.frame_buffer = []
+        if print_message:
+            print("Simulator reset")
 
-        print("Simulator reset")
+    def _pixel_scale(self):
+        width = self.config["image_width"]
+        height = self.config["image_height"]
+        ground_y = int(height * 2 / 3)
+        horizontal_scale = width / (4 * self.l)
+        vertical_scale = (ground_y - 20) / (2 * self.l)
+        return min(horizontal_scale, vertical_scale)
 
     def get_cart_x_pixel(self):
-        """
-        将小车物理位置转换为画面中的 x 像素坐标。
-
-        使用与 get_current_image() 一致的坐标映射。
-        供 EventFilter 圆形 ROI 使用。
-
-        Returns:
-            cart_x (int): 小车在画面中的 x 坐标（像素）
-        """
-        width = self.config['image_width']
-        height = self.config['image_height']
-        x_cart = self.state[0]
-
-        ground_y = int(height * 2 / 3)
-        horizontal_scale = width / (4 * self.l)
-        vertical_scale = (ground_y - 20) / (2 * self.l)
-        scale = min(horizontal_scale, vertical_scale)
-        center_x = width // 2
-
-        cart_x = int(center_x + x_cart * scale)
-        return cart_x
+        """Return the cart pivot x-coordinate in image pixels."""
+        return int(self.config["image_width"] // 2 + self.state[0] * self._pixel_scale())
 
     def get_pendulum_length_pixels(self):
-        """
-        杆子在画面中的像素长度（用于圆形ROI半径）。
-
-        Returns:
-            length_px (int): 杆子的像素长度
-        """
-        width = self.config['image_width']
-        height = self.config['image_height']
-
-        ground_y = int(height * 2 / 3)
-        horizontal_scale = width / (4 * self.l)
-        vertical_scale = (ground_y - 20) / (2 * self.l)
-        scale = min(horizontal_scale, vertical_scale)
-
-        return int(self.l * scale)
+        """Return the rendered pendulum length in pixels."""
+        return int(self.l * self._pixel_scale())
 
     def get_state_vector(self):
-        """Get the state vector"""
+        """Return [cart position, cart velocity, angle, angular velocity]."""
         return self.state.copy()
 
     def get_angle(self):
-        """Get the current angle"""
         return self.state[2]
 
     def get_angular_velocity(self):
-        """Get the current angular velocity"""
         return self.state[3]
 
     def get_cart_position(self):
-        """Get the cart position"""
         return self.state[0]
+
+
+def parse_args():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Run the standalone inverted-pendulum simulator."
+    )
+    parser.add_argument("--duration", type=float, default=5.0,
+                        help="Simulation duration in seconds.")
+    parser.add_argument("--sampling-rate", type=float, default=100.0,
+                        help="Physics sampling rate in Hz.")
+    parser.add_argument("--initial-angle", type=float, default=5.0,
+                        help="Initial pendulum angle in degrees.")
+    parser.add_argument("--force", type=float, default=0.0,
+                        help="Constant force applied to the cart in newtons.")
+    parser.add_argument("--width", type=int, default=320,
+                        help="Rendered image width.")
+    parser.add_argument("--height", type=int, default=240,
+                        help="Rendered image height.")
+    parser.add_argument("--headless", action="store_true",
+                        help="Run without OpenCV windows.")
+    parser.add_argument("--save-video", action="store_true",
+                        help="Save outputs/pendulum_simulation.mp4.")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    simulator = InvertedPendulumSimulator({
+        "image_width": args.width,
+        "image_height": args.height,
+        "sampling_rate": args.sampling_rate,
+        "initial_angle": np.radians(args.initial_angle),
+    })
+
+    num_steps = int(args.duration * args.sampling_rate)
+    frames = []
+    report_interval = max(1, int(args.sampling_rate))
+
+    for step_idx in range(num_steps):
+        simulator.step(args.force)
+        frame = simulator.get_current_image()
+        if args.save_video:
+            frames.append(frame)
+        if not args.headless:
+            cv2.imshow("Inverted Pendulum Simulator", frame)
+            if cv2.waitKey(max(1, int(1000 / args.sampling_rate))) & 0xFF == ord("q"):
+                break
+        if step_idx % report_interval == 0:
+            print(
+                f"  t={simulator.time:.2f}s "
+                f"angle={np.degrees(simulator.get_angle()):+.2f} deg "
+                f"cart={simulator.get_cart_position():+.3f} m"
+            )
+
+    if args.save_video and frames:
+        output_dir = Path("outputs")
+        output_dir.mkdir(exist_ok=True)
+        simulator.save_video(frames, str(output_dir / "pendulum_simulation.mp4"))
+
+    cv2.destroyAllWindows()
+    print("Final state:", simulator.get_state_vector())
+
+
+if __name__ == "__main__":
+    main()

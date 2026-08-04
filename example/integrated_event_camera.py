@@ -12,7 +12,10 @@ import numpy as np
 
 
 ROOT = Path(__file__).resolve().parents[1]
+EXAMPLE_DIR = Path(__file__).resolve().parent
 SRC_DIR = ROOT / "src"
+if str(EXAMPLE_DIR) not in sys.path:
+    sys.path.insert(0, str(EXAMPLE_DIR))
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
@@ -71,6 +74,10 @@ class IntegratedEventCamera:
 
     def _make_sensor(self):
         dvs = DvsSensor("IntegratedDVS")
+        disable_pos_noise = self.config["bgnp"] <= 0
+        disable_neg_noise = self.config["bgnn"] <= 0
+        bgnp = self.config["bgnp"] if not disable_pos_noise else 0.001
+        bgnn = self.config["bgnn"] if not disable_neg_noise else 0.001
         dvs.initCamera(
             self.width,
             self.height,
@@ -81,9 +88,13 @@ class IntegratedEventCamera:
             th_pos=self.config["th_pos"],
             th_neg=self.config["th_neg"],
             th_noise=self.config["th_noise"],
-            bgnp=self.config["bgnp"],
-            bgnn=self.config["bgnn"],
+            bgnp=bgnp,
+            bgnn=bgnn,
         )
+        if disable_pos_noise:
+            dvs.bgn_pos_next.fill(np.iinfo(np.uint64).max)
+        if disable_neg_noise:
+            dvs.bgn_neg_next.fill(np.iinfo(np.uint64).max)
         return dvs
 
     def init_with_frame(self, frame):

@@ -38,6 +38,37 @@ If you already use the checked-in local virtual environment, run commands with:
 
 ## Run
 
+Check the standalone pendulum simulator:
+
+```bash
+python example\inverted_pendulum_simulator.py --headless --duration 1
+```
+
+Check that pendulum motion produces event-camera output:
+
+```bash
+python example\check_event_camera_capture.py --headless --duration 2 --background-noise 0 --save-preview
+```
+
+Check event transmission plus state-estimation accuracy:
+
+```bash
+python example\check_state_estimation.py --headless --duration 2 --background-noise 0
+```
+
+Check the full event-estimation LQR closed loop:
+
+```bash
+python example\closed_loop_system.py --headless --duration 15 --estimator event
+```
+
+Generate a swing-up demo from the downward position with true/estimated
+four-state overlays:
+
+```bash
+python example\closed_loop_system.py --headless --duration 20 --estimator ground_truth --controller SwingUpLQR --initial-angle 180 --save-video
+```
+
 Headless batch run:
 
 ```bash

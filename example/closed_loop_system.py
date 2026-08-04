@@ -30,7 +30,13 @@ class ClosedLoopSystem:
             "video_height": 360,
             "show_display": False,
             "display_events": False,
+            "save_video": False,
             "estimator": "event",       # event or ground_truth
+            "controller": "LQR",
+            "initial_angle_deg": 8.0,
+            "initial_cart_position": 0.0,
+            "initial_cart_velocity": 0.0,
+            "initial_angular_velocity": 0.0,
             "output_dir": "outputs",
             "seed": 7,
         }
@@ -45,7 +51,10 @@ class ClosedLoopSystem:
         self.pendulum = InvertedPendulumSimulator({
             "image_width": self.config["video_width"],
             "image_height": self.config["video_height"],
-            "initial_angle": np.radians(8.0),
+            "initial_angle": np.radians(self.config["initial_angle_deg"]),
+            "initial_cart_position": self.config["initial_cart_position"],
+            "initial_cart_velocity": self.config["initial_cart_velocity"],
+            "initial_angular_velocity": self.config["initial_angular_velocity"],
             "sampling_rate": 200.0,
         })
         pendulum_length_px = self.pendulum.get_pendulum_length_pixels()
@@ -92,19 +101,40 @@ class ClosedLoopSystem:
             )
             self.estimator.set_ground_truth_callback(self._ground_truth_state)
         else:
+            estimator_config = {
+                "initial_angle": np.radians(self.config["initial_angle_deg"]),
+                "use_initial_angle_hint": abs(self.config["initial_angle_deg"]) > 90.0,
+            }
+            if self.config["controller"] == "SwingUpLQR":
+                estimator_config.update({
+                    "y_min": 5,
+                    "y_max": self.config["video_height"] - 5,
+                    "cart_y_min": int(self.config["video_height"] * 2 / 3) - 25,
+                    "cart_y_max": int(self.config["video_height"] * 2 / 3) + 5,
+                    "recent_time_fraction": 0.35,
+                    "min_events": 14,
+                    "confidence_min": 0.08,
+                })
             self.estimator = EventBasedEstimator(
                 self.config["video_width"],
                 self.config["video_height"],
+                estimator_config,
             )
 
         self.controller = PendulumController({
-            "controller_type": "LQR",
+            "controller_type": self.config["controller"],
             "K_cart_pos": -3.1623,
             "K_cart_vel": -5.0317,
             "K_angle": 47.7304,
             "K_angle_vel": 13.979,
-            "max_force": 12.0,
+            "max_force": 18.0 if self.config["controller"] == "SwingUpLQR" else 12.0,
             "sampling_rate": 100.0,
+            "pendulum_mass": self.pendulum.m,
+            "pendulum_length": self.pendulum.l,
+            "gravity": self.pendulum.g,
+            "swingup_gain": 12.0,
+            "swingup_cart_gain": 1.0,
+            "swingup_cart_vel_gain": 1.6,
         })
 
         self.running = False
@@ -113,6 +143,7 @@ class ClosedLoopSystem:
         self.output_dir = Path(self.config["output_dir"])
         self.output_dir.mkdir(exist_ok=True)
         self.log = self._empty_log()
+        self.video_writer = None
 
     def run_simulation(self):
         dt_physics = 1.0 / self.pendulum.config["sampling_rate"]
@@ -132,6 +163,7 @@ class ClosedLoopSystem:
         self.running = True
         started = time.time()
         force = 0.0
+        self._open_video_writer(dt_control)
 
         for idx in range(total_frames):
             self.simulation_time = idx * dt_control
@@ -144,7 +176,7 @@ class ClosedLoopSystem:
                 events,
                 self.event_camera.current_time_us,
             )
-            if valid:
+            if valid or self.config["controller"] == "SwingUpLQR":
                 force = self.controller.compute_control(
                     angle,
                     angle_vel,
@@ -161,8 +193,14 @@ class ClosedLoopSystem:
             self._log_step(angle, angle_vel, cart_pos, cart_vel, valid, force, events)
             self.frame_count += 1
 
+            if self.config["show_display"] or self.config["save_video"]:
+                status_frame = self._make_status_frame(
+                    frame, angle, angle_vel, cart_pos, cart_vel, valid, force, events.i
+                )
+                if self.video_writer is not None:
+                    self.video_writer.write(status_frame)
             if self.config["show_display"]:
-                self._display(frame, angle, angle_vel, cart_pos, cart_vel, valid, force, events.i)
+                cv2.imshow("Event-Camera Closed-Loop Control", status_frame)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
 
@@ -170,6 +208,9 @@ class ClosedLoopSystem:
 
         self.running = False
         elapsed = time.time() - started
+        if self.video_writer is not None:
+            self.video_writer.release()
+            self.video_writer = None
         cv2.destroyAllWindows()
         return self._report(elapsed)
 
@@ -205,6 +246,7 @@ class ClosedLoopSystem:
             "events": [],
             "valid": [],
             "confidence": [],
+            "control_mode": [],
         }
 
     def _log_step(self, angle, angle_vel, cart_pos, cart_vel, valid, force, events):
@@ -222,18 +264,22 @@ class ClosedLoopSystem:
         self.log["events"].append(events.i if events else 0)
         self.log["valid"].append(bool(valid))
         self.log["confidence"].append(getattr(self.estimator, "confidence", 1.0 if valid else 0.0))
+        self.log["control_mode"].append(getattr(self.controller, "current_mode", self.config["controller"]))
 
-    def _display(self, frame, angle, angle_vel, cart_pos, cart_vel, valid, force, events_count):
+    def _make_status_frame(self, frame, angle, angle_vel, cart_pos, cart_vel, valid, force, events_count):
         image = frame.copy()
-        y0 = 130
+        true_angle, true_angle_vel, true_cart, true_cart_vel = self._ground_truth_state()
+        true_angle = self._wrap_angle(true_angle)
+        angle = self._wrap_angle(angle)
+        y0 = 108
         lines = [
-            f"true theta: {np.degrees(self.pendulum.get_angle()):+6.2f} deg",
-            f"est  theta: {np.degrees(angle):+6.2f} deg",
-            f"est  omega: {np.degrees(angle_vel):+6.2f} deg/s",
-            f"est  cart:  {cart_pos:+6.3f} m",
-            f"est  cartv: {cart_vel:+6.3f} m/s",
-            f"force:      {force:+6.2f} N",
-            f"events: {events_count} valid: {valid}",
+            "STATE                 TRUE        EST",
+            f"theta deg        {np.degrees(true_angle):+8.2f} {np.degrees(angle):+8.2f}",
+            f"theta_dot deg/s  {np.degrees(true_angle_vel):+8.2f} {np.degrees(angle_vel):+8.2f}",
+            f"cart x m         {true_cart:+8.3f} {cart_pos:+8.3f}",
+            f"cart v m/s       {true_cart_vel:+8.3f} {cart_vel:+8.3f}",
+            f"force: {force:+7.2f} N  mode: {getattr(self.controller, 'current_mode', '-')}",
+            f"events: {events_count}  valid: {valid}",
         ]
         for idx, line in enumerate(lines):
             cv2.putText(
@@ -245,7 +291,22 @@ class ClosedLoopSystem:
                 (255, 255, 255),
                 1,
             )
-        cv2.imshow("Event-Camera LQR Control", image)
+        return image
+
+    def _open_video_writer(self, dt_control):
+        if not self.config["save_video"]:
+            self.video_writer = None
+            return
+        output_path = self.output_dir / "closed_loop_swingup_demo.mp4"
+        fps = max(1.0, min(60.0, 1.0 / dt_control))
+        size = (self.config["video_width"], self.config["video_height"])
+        self.video_writer = cv2.VideoWriter(
+            str(output_path),
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            fps,
+            size,
+        )
+        print(f"Saving display video to: {output_path}")
 
     def _sleep_if_needed(self, started, completed_frames, dt_control):
         factor = float(self.config["real_time_factor"])
@@ -260,8 +321,10 @@ class ClosedLoopSystem:
         arrays = {name: np.array(values) for name, values in self.log.items()}
         np.savez(self.output_dir / "closed_loop_event_lqr_result.npz", **arrays)
 
-        angle_deg = np.degrees(arrays["true_angle"])
-        est_angle_deg = np.degrees(arrays["est_angle"])
+        true_angle_wrapped = np.array([self._wrap_angle(v) for v in arrays["true_angle"]])
+        est_angle_wrapped = np.array([self._wrap_angle(v) for v in arrays["est_angle"]])
+        angle_deg = np.degrees(true_angle_wrapped)
+        est_angle_deg = np.degrees(est_angle_wrapped)
         cart = arrays["true_cart"]
         force = arrays["force"]
         valid_ratio = float(np.mean(arrays["valid"])) if len(arrays["valid"]) else 0.0
@@ -270,6 +333,11 @@ class ClosedLoopSystem:
         steady_angle = angle_deg[-steady_n:]
         steady_cart = cart[-steady_n:]
         steady_force = force[-steady_n:]
+        modes = arrays["control_mode"] if "control_mode" in arrays else np.array([])
+        mode_counts = {
+            str(mode): int(np.sum(modes == mode))
+            for mode in np.unique(modes)
+        } if len(modes) else {}
 
         summary = {
             "frames": self.frame_count,
@@ -280,10 +348,19 @@ class ClosedLoopSystem:
             "steady_max_angle_deg": float(np.max(np.abs(steady_angle))),
             "steady_max_cart_m": float(np.max(np.abs(steady_cart))),
             "mean_abs_force_n": float(np.mean(np.abs(steady_force))),
-            "mean_abs_angle_error_deg": float(np.mean(np.abs(angle_deg - est_angle_deg))),
+            "mean_abs_angle_error_deg": float(np.mean(np.abs(np.degrees(
+                [self._wrap_angle(e - t) for e, t in zip(est_angle_wrapped, true_angle_wrapped)]
+            )))),
             "valid_ratio": valid_ratio,
             "event_stats": self.event_camera.get_event_statistics(),
+            "mode_counts": mode_counts,
         }
+        summary["stable"] = (
+            summary["steady_rms_angle_deg"] <= 5.0 and
+            summary["steady_max_angle_deg"] <= 12.0 and
+            summary["steady_max_cart_m"] <= 0.5 and
+            summary["valid_ratio"] >= 0.8
+        )
 
         print("\n" + "=" * 60)
         print("RESULTS")
@@ -293,11 +370,18 @@ class ClosedLoopSystem:
         print(f"  final angle: {summary['final_angle_deg']:+.2f} deg")
         print(f"  final cart: {summary['final_cart_m']:+.3f} m")
         print(f"  steady RMS angle: {summary['steady_rms_angle_deg']:.2f} deg")
+        print(f"  steady max angle: {summary['steady_max_angle_deg']:.2f} deg")
         print(f"  steady max cart: {summary['steady_max_cart_m']:.3f} m")
         print(f"  mean |angle error|: {summary['mean_abs_angle_error_deg']:.2f} deg")
         print(f"  valid estimates: {summary['valid_ratio'] * 100:.1f}%")
+        print(f"  control modes: {summary['mode_counts']}")
+        print(f"  stable: {summary['stable']}")
         print(f"  result file: {self.output_dir / 'closed_loop_event_lqr_result.npz'}")
         return summary
+
+    @staticmethod
+    def _wrap_angle(angle):
+        return float((angle + np.pi) % (2 * np.pi) - np.pi)
 
 
 def parse_args():
@@ -311,10 +395,17 @@ def parse_args():
     parser.add_argument("--estimator", choices=["event", "ground_truth"],
                         default="event",
                         help="Use event-based estimation or noisy ground-truth debug mode.")
+    parser.add_argument("--controller", choices=["LQR", "SwingUpLQR"],
+                        default="LQR",
+                        help="Use LQR near upright or hybrid swing-up plus LQR.")
+    parser.add_argument("--initial-angle", type=float, default=8.0,
+                        help="Initial pendulum angle in degrees. 0 is upright, 180 is downward.")
     parser.add_argument("--headless", action="store_true",
                         help="Disable OpenCV windows for batch experiments.")
     parser.add_argument("--display-events", action="store_true",
                         help="Show the filtered event-camera stream.")
+    parser.add_argument("--save-video", action="store_true",
+                        help="Save the rendered status display to outputs/closed_loop_swingup_demo.mp4.")
     parser.add_argument("--real-time", type=float, default=0.0,
                         help="Real-time factor. 0 runs as fast as possible.")
     parser.add_argument("--seed", type=int, default=7,
@@ -328,7 +419,10 @@ def main():
         "simulation_duration": args.duration,
         "show_display": not args.headless,
         "display_events": args.display_events,
+        "save_video": args.save_video,
         "estimator": args.estimator,
+        "controller": args.controller,
+        "initial_angle_deg": args.initial_angle,
         "real_time_factor": args.real_time,
         "seed": args.seed,
     }

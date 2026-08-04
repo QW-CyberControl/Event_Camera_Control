@@ -1,153 +1,152 @@
 # pendulum_controller.py
-"""
-Inverted pendulum controller module
-
-支持多种控制策略：
-  - PD:         仅角度 + 角速度
-  - PID:        角度 + 角速度 + 积分
-  - LQR:        全状态反馈 (cart_pos + cart_vel + angle + angular_vel)
-  - BangBang:   开关控制（仅角度）
-
-LQR 控制律:
-  F = -(K_cart_pos * cart_pos + K_cart_vel * cart_vel
-        + K_angle * angle + K_angle_vel * angular_vel)
-"""
+"""Controllers for the inverted pendulum on a cart."""
 import numpy as np
 
 
 class PendulumController:
-    """Inverted pendulum controller"""
+    """PD, PID, LQR, BangBang, and hybrid swing-up/LQR controller."""
 
     def __init__(self, config=None):
         self.config = {
-            'controller_type': 'LQR',  # PD, PID, LQR, BangBang
-
-            # LQR 全状态增益
-            'K_cart_pos': 2.0,      # 小车位置增益（防漂移）
-            'K_cart_vel': 3.0,      # 小车速度阻尼
-            'K_angle': 80.0,        # 角度增益（稳定杆子）
-            'K_angle_vel': 15.0,    # 角速度阻尼
-
-            # PD 增益（向后兼容）
-            'Kp': 50.0,
-            'Kd': 10.0,
-            'Ki': 0.0,
-            'integral_limit': 5.0,
-
-            'max_force': 8.0,       # 最大控制力
-            'target_angle': 0.0,    # 目标角度（竖直向上）
-            'target_cart': 0.0,     # 目标小车位置（中心）
-            'deadband': 0.005,      # 死区
-
-            'sampling_rate': 100.0,
+            "controller_type": "LQR",
+            "K_cart_pos": -3.1623,
+            "K_cart_vel": -5.0317,
+            "K_angle": 47.7304,
+            "K_angle_vel": 13.979,
+            "Kp": 50.0,
+            "Kd": 10.0,
+            "Ki": 0.0,
+            "integral_limit": 5.0,
+            "max_force": 12.0,
+            "target_angle": 0.0,
+            "target_cart": 0.0,
+            "deadband": 0.005,
+            "sampling_rate": 100.0,
+            "pendulum_mass": 0.1,
+            "pendulum_length": 1.0,
+            "gravity": 9.81,
+            "swingup_gain": 10.0,
+            "swingup_cart_gain": 4.0,
+            "swingup_cart_vel_gain": 4.0,
+            "swingup_kick_force": 8.0,
+            "lqr_switch_angle": np.radians(22.0),
+            "lqr_switch_velocity": 4.5,
         }
-
         if config:
             self.config.update(config)
 
-        # 状态
         self.integral_error = 0.0
         self.prev_error = 0.0
-
-        # 历史
         self.control_history = []
         self.error_history = []
         self.cart_error_history = []
+        self.mode_history = []
+        self.current_mode = self.config["controller_type"]
 
         print(f"Controller initialized: {self.config['controller_type']} controller")
-        if self.config['controller_type'] == 'LQR':
-            print(f"  Gains: Kx={self.config['K_cart_pos']}, Kv={self.config['K_cart_vel']}, "
-                  f"Kth={self.config['K_angle']}, Kw={self.config['K_angle_vel']}")
-        else:
-            print(f"  Gains: Kp={self.config['Kp']}, Kd={self.config['Kd']}, Ki={self.config['Ki']}")
+        print(
+            f"  LQR gains: Kx={self.config['K_cart_pos']}, "
+            f"Kv={self.config['K_cart_vel']}, Kth={self.config['K_angle']}, "
+            f"Kw={self.config['K_angle_vel']}"
+        )
 
     def compute_control(self, angle, angular_velocity, current_time=None,
                         cart_pos=0.0, cart_velocity=0.0):
-        """
-        Compute control force.
-
-        LQR 控制律（标准形式）:
-            u = -K * [x, x_dot, theta, theta_dot]
-          = -(K_cart_pos * cart_pos + K_cart_vel * cart_vel
-              + K_angle * angle + K_angle_vel * angular_vel)
-
-        注意：因为目标状态是零（杆子竖直、小车居中），
-        状态本身就是误差信号，不需要再算 error = target - state。
-
-        Args:
-            angle: 当前角度 (rad)
-            angular_velocity: 当前角速度 (rad/s)
-            current_time: 当前时间 (s)
-            cart_pos: 小车位置 (m)
-            cart_velocity: 小车速度 (m/s)
-
-        Returns:
-            control_force (N)
-        """
-        # 角度误差（兼容 PD/PID）
-        angle_error = self.config['target_angle'] - angle
-        if abs(angle_error) < self.config['deadband']:
+        """Compute the cart force from the estimated state."""
+        controller_type = self.config["controller_type"]
+        angle = self._wrap_angle(angle)
+        angle_error = self._wrap_angle(self.config["target_angle"] - angle)
+        if abs(angle_error) < self.config["deadband"]:
             angle_error = 0.0
 
-        # 积分项（兼容 PID）
-        self.integral_error += angle_error / self.config['sampling_rate']
+        self.integral_error += angle_error / self.config["sampling_rate"]
         self.integral_error = np.clip(
             self.integral_error,
-            -self.config['integral_limit'],
-            self.config['integral_limit']
+            -self.config["integral_limit"],
+            self.config["integral_limit"],
         )
 
-        # 按控制器类型计算力
-        if self.config['controller_type'] == 'LQR':
-            # LQR: u = -K * state
-            # state = [cart_pos, cart_vel, angle, ang_vel]
-            control_force = -(
-                self.config['K_cart_pos'] * cart_pos +
-                self.config['K_cart_vel'] * cart_velocity +
-                self.config['K_angle'] * angle +
-                self.config['K_angle_vel'] * angular_velocity
+        if controller_type == "SwingUpLQR":
+            control_force = self._compute_swingup_lqr(
+                angle,
+                angular_velocity,
+                cart_pos,
+                cart_velocity,
             )
-
-        elif self.config['controller_type'] == 'PD':
+        elif controller_type == "LQR":
+            self.current_mode = "LQR"
+            control_force = self._compute_lqr(angle, angular_velocity, cart_pos, cart_velocity)
+        elif controller_type == "PD":
+            self.current_mode = "PD"
+            control_force = self.config["Kp"] * angle_error - self.config["Kd"] * angular_velocity
+        elif controller_type == "PID":
+            self.current_mode = "PID"
             control_force = (
-                self.config['Kp'] * angle_error +
-                self.config['Kd'] * (-angular_velocity)
+                self.config["Kp"] * angle_error
+                - self.config["Kd"] * angular_velocity
+                + self.config["Ki"] * self.integral_error
             )
-
-        elif self.config['controller_type'] == 'PID':
-            control_force = (
-                self.config['Kp'] * angle_error +
-                self.config['Kd'] * (-angular_velocity) +
-                self.config['Ki'] * self.integral_error
-            )
-
-        elif self.config['controller_type'] == 'BangBang':
-            if angle_error > 0:
-                control_force = self.config['max_force']
-            else:
-                control_force = -self.config['max_force']
-
+        elif controller_type == "BangBang":
+            self.current_mode = "BangBang"
+            control_force = self.config["max_force"] if angle_error > 0 else -self.config["max_force"]
         else:
-            control_force = (
-                self.config['Kp'] * angle_error +
-                self.config['Kd'] * (-angular_velocity)
-            )
+            self.current_mode = "PD"
+            control_force = self.config["Kp"] * angle_error - self.config["Kd"] * angular_velocity
 
-        # 限幅
-        control_force = np.clip(
+        control_force = float(np.clip(
             control_force,
-            -self.config['max_force'],
-            self.config['max_force']
-        )
+            -self.config["max_force"],
+            self.config["max_force"],
+        ))
 
-        # 记录
         self.control_history.append(control_force)
         self.error_history.append(angle_error)
-        # cart_error = target_cart - cart_pos（仅用于记录）
-        _cart_error = self.config['target_cart'] - cart_pos
-        self.cart_error_history.append(_cart_error)
-
+        self.cart_error_history.append(self.config["target_cart"] - cart_pos)
+        self.mode_history.append(self.current_mode)
         return control_force
+
+    def _compute_swingup_lqr(self, angle, angular_velocity, cart_pos, cart_velocity):
+        near_upright = (
+            abs(angle) <= self.config["lqr_switch_angle"] and
+            abs(angular_velocity) <= self.config["lqr_switch_velocity"]
+        )
+        if near_upright:
+            self.current_mode = "LQR"
+            return self._compute_lqr(angle, angular_velocity, cart_pos, cart_velocity)
+
+        self.current_mode = "SwingUp"
+        m = self.config["pendulum_mass"]
+        length = self.config["pendulum_length"]
+        gravity = self.config["gravity"]
+        desired_energy = m * gravity * length
+        energy = 0.5 * m * (length * angular_velocity) ** 2 + m * gravity * length * np.cos(angle)
+        energy_error = energy - desired_energy
+
+        swing_force = (
+            -self.config["swingup_gain"] *
+            energy_error *
+            angular_velocity *
+            np.cos(angle)
+        )
+        if abs(angular_velocity) < 0.05 and abs(abs(angle) - np.pi) < 0.25:
+            swing_force = self.config["swingup_kick_force"]
+        cart_centering = (
+            -self.config["swingup_cart_gain"] * cart_pos
+            -self.config["swingup_cart_vel_gain"] * cart_velocity
+        )
+        return swing_force + cart_centering
+
+    def _compute_lqr(self, angle, angular_velocity, cart_pos, cart_velocity):
+        return -(
+            self.config["K_cart_pos"] * cart_pos
+            + self.config["K_cart_vel"] * cart_velocity
+            + self.config["K_angle"] * angle
+            + self.config["K_angle_vel"] * angular_velocity
+        )
+
+    @staticmethod
+    def _wrap_angle(angle):
+        return float((angle + np.pi) % (2 * np.pi) - np.pi)
 
     def reset(self):
         self.integral_error = 0.0
@@ -155,30 +154,32 @@ class PendulumController:
         self.control_history = []
         self.error_history = []
         self.cart_error_history = []
+        self.mode_history = []
+        self.current_mode = self.config["controller_type"]
 
     def get_control_statistics(self):
         if not self.control_history:
             return {
-                'avg_force': 0.0, 'max_force': 0.0,
-                'rms_error': 0.0, 'rms_cart_error': 0.0,
-                'num_control_steps': 0,
+                "avg_force": 0.0,
+                "max_force": 0.0,
+                "rms_error": 0.0,
+                "rms_cart_error": 0.0,
+                "num_control_steps": 0,
+                "mode_counts": {},
             }
 
-        avg_force = np.mean(np.abs(self.control_history))
-        max_force = np.max(np.abs(self.control_history))
-
-        rms_error = 0.0
-        if self.error_history:
-            rms_error = np.sqrt(np.mean(np.array(self.error_history) ** 2))
-
-        rms_cart = 0.0
-        if self.cart_error_history:
-            rms_cart = np.sqrt(np.mean(np.array(self.cart_error_history) ** 2))
-
+        controls = np.array(self.control_history)
+        errors = np.array(self.error_history)
+        cart_errors = np.array(self.cart_error_history)
+        mode_counts = {
+            mode: self.mode_history.count(mode)
+            for mode in sorted(set(self.mode_history))
+        }
         return {
-            'avg_force': avg_force,
-            'max_force': max_force,
-            'rms_error': rms_error,
-            'rms_cart_error': rms_cart,
-            'num_control_steps': len(self.control_history),
+            "avg_force": float(np.mean(np.abs(controls))),
+            "max_force": float(np.max(np.abs(controls))),
+            "rms_error": float(np.sqrt(np.mean(errors ** 2))),
+            "rms_cart_error": float(np.sqrt(np.mean(cart_errors ** 2))),
+            "num_control_steps": len(self.control_history),
+            "mode_counts": mode_counts,
         }
